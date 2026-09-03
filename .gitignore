@@ -1,0 +1,17 @@
+node_modules
+.next
+out
+dist
+*.local
+.DS_Store
+*.sw?
+.env*.local
+next-env.d.ts
+*.tsbuildinfo
+public/data/
+public/pdf.worker.min.mjs
+public/pdfjs/
+.vercel
+
+# Local opencode config
+.opencode/
