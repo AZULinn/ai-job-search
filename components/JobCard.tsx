@@ -1,0 +1,336 @@
+"use client";
+
+import { useState } from "react";
+import { daysUntil } from "@/lib/scoring";
+import type { Job } from "@/lib/types";
+import type { TrackingStatus } from "@/lib/tracker";
+import type { MatchResult } from "@/lib/matchScore";
+
+const STATUS_OPTIONS: { value: TrackingStatus | ""; label: string }[] = [
+  { value: "", label: "未跟踪" },
+  { value: "saved", label: "收藏" },
+  { value: "applied", label: "已投" },
+  { value: "written", label: "笔试" },
+  { value: "interview", label: "面试" },
+  { value: "hr", label: "HR面" },
+  { value: "offer", label: "Offer" },
+  { value: "rejected", label: "已拒" },
+  { value: "withdrawn", label: "放弃" },
+];
+
+const CATEGORY_PILL_STYLE: Record<string, { bg: string; color: string }> = {
+  "互联网": { bg: "var(--cat-internet-bg)", color: "var(--cat-internet)" },
+  "金融": { bg: "var(--cat-finance-bg)", color: "var(--cat-finance)" },
+  "外企": { bg: "var(--cat-foreign-bg)", color: "var(--cat-foreign)" },
+  "快消": { bg: "var(--cat-fmcg-bg)", color: "var(--cat-fmcg)" },
+  "实体": { bg: "var(--cat-entity-bg)", color: "var(--cat-entity)" },
+  "管培": { bg: "var(--cat-trainee-bg)", color: "var(--cat-trainee)" },
+  "其他": { bg: "var(--border-subtle)", color: "var(--text-tertiary)" },
+};
+
+const CATEGORY_BAR_COLORS: Record<string, string> = {
+  互联网: "bg-[var(--cat-internet)]",
+  金融: "bg-[var(--cat-finance)]",
+  外企: "bg-[var(--cat-foreign)]",
+  快消: "bg-[var(--cat-fmcg)]",
+  实体: "bg-[var(--cat-entity)]",
+  管培: "bg-[var(--cat-trainee)]",
+  其他: "bg-[rgba(0,0,0,0.15)]",
+};
+
+const HIGHLIGHT_KEYWORDS: Record<string, string> = {
+  "AI": "AI", "人工智能": "AI", "大模型": "大模型", "LLM": "LLM", "NLP": "NLP", "AIGC": "AIGC",
+  "产品经理": "产品", "产品设计": "产品", "产品运营": "运营", "商业分析": "商分",
+  "数据分析": "数据", "数据驱动": "数据", "算法": "算法", "研发": "研发",
+  "投行": "投行", "投资银行": "投行", "资管": "资管", "金融": "金融", "风控": "风控",
+  "研究": "研究", "策略": "策略", "运营": "运营", "市场": "市场", "销售": "销售",
+  "管培": "管培", "管理培训": "管培", "实习": "实习",
+  "Python": "Python", "Java": "Java", "SQL": "SQL", "TypeScript": "TS",
+  "React": "React", "机器学习": "ML", "深度学习": "DL",
+  "全栈": "全栈", "前端": "前端", "后端": "后端",
+  "供应链": "供应链", "咨询": "咨询", "审计": "审计",
+};
+
+function extractRoleTags(job: Job): string[] {
+  if (job.aiTags && job.aiTags.skills.length > 0) {
+    return job.aiTags.skills.slice(0, 4);
+  }
+  const text = [job.title, job.description ?? "", ...job.tags].join(" ");
+  const matched = new Set<string>();
+  for (const [keyword, label] of Object.entries(HIGHLIGHT_KEYWORDS)) {
+    if (text.includes(keyword)) matched.add(label);
+  }
+  return Array.from(matched).slice(0, 4);
+}
+
+function daysSince(iso: string | null, now: Date): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const diff = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diff === 0) return "今天";
+  if (diff === 1) return "昨天";
+  if (diff < 7) return `${diff}天前`;
+  if (diff < 30) return `${Math.floor(diff / 7)}周前`;
+  return `${Math.floor(diff / 30)}月前`;
+}
+
+function SmartAnalysis({ job, matchResult }: { job: Job; matchResult?: MatchResult }) {
+  const text = [job.title, job.description ?? ""].join(" ");
+  const matched = new Set<string>();
+  for (const [keyword, label] of Object.entries(HIGHLIGHT_KEYWORDS)) {
+    if (text.includes(keyword)) matched.add(label);
+  }
+  const skillTags = Array.from(matched).slice(0, 6);
+
+  const dimensions: { label: string; value: string; color: string }[] = [];
+
+  if (job.companyTier === 1) {
+    dimensions.push({ label: "公司", value: "头部企业", color: "text-amber-600" });
+  } else if (job.companyTier === 2) {
+    dimensions.push({ label: "公司", value: "知名企业", color: "text-blue-600" });
+  }
+
+  dimensions.push({ label: "行业", value: job.category, color: "text-[var(--text)]" });
+  dimensions.push({ label: "类型", value: job.jobType, color: "text-[var(--text)]" });
+
+  if (job.salary) {
+    dimensions.push({ label: "薪资", value: job.salary, color: "text-green-700" });
+  }
+
+  if (job.location.length > 2) {
+    dimensions.push({ label: "城市", value: `${job.location.length}个城市可选`, color: "text-[var(--text-secondary)]" });
+  }
+
+  const hasMatch = matchResult && matchResult.score > 0;
+  const matchPct = hasMatch ? Math.round(matchResult!.score * 100) : 0;
+  const aiMatchPct = Math.round((job.scores.aiMatch ?? 0) * 100);
+  const displayPct = hasMatch ? matchPct : aiMatchPct;
+  const displayReasons = hasMatch
+    ? matchResult!.reasons.slice(0, 3)
+    : aiMatchPct > 0
+      ? (skillTags.length > 0 ? [`技能相关: ${skillTags.slice(0, 3).join(", ")}`] : [])
+      : [];
+
+  return (
+    <div className="px-3 py-2.5 rounded-md bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
+      <div className="flex items-center justify-between text-[11px] mb-1.5">
+        <span className="text-[var(--text-secondary)] font-medium">岗位分析</span>
+        <span className={`font-medium ${displayPct >= 70 ? "text-[var(--brand)]" : displayPct >= 40 ? "text-[var(--brand)]" : "text-[var(--text-tertiary)]"}`}>
+          匹配 {displayPct}%
+        </span>
+      </div>
+      <div className="h-[3px] bg-[var(--border-subtle)] rounded-full overflow-hidden mb-2">
+        <div
+          className={`h-full rounded-full transition-all ${
+            displayPct >= 70
+              ? "bg-[var(--brand)]"
+              : displayPct >= 40
+                ? "bg-[var(--brand)]"
+                : "bg-[var(--border-strong)]"
+          }`}
+          style={{ width: `${Math.max(displayPct, 3)}%` }}
+        />
+      </div>
+
+      {displayReasons.length > 0 ? (
+        <div className="text-[10px] text-[var(--text)] font-medium line-clamp-1 mb-1.5">
+          {displayReasons.join(" · ")}
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-1.5">
+          {dimensions.slice(0, 6).map((d) => (
+            <span key={d.label} className="text-[10px]">
+              <span className="text-[var(--text-tertiary)]">{d.label}</span>{" "}
+              <span className={`font-medium ${d.color}`}>{d.value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {job.aiTags?.summary && (
+        <p className="text-[10px] text-[var(--text-secondary)] mt-1.5 line-clamp-1 leading-relaxed">{job.aiTags.summary}</p>
+      )}
+    </div>
+  );
+}
+
+export default function JobCard({
+  job,
+  now,
+  isNew,
+  trackingStatus,
+  onTrack,
+  matchResult,
+  comparing,
+  onCompareToggle,
+}: {
+  job: Job;
+  now: number;
+  isNew?: boolean;
+  trackingStatus?: TrackingStatus | null;
+  onTrack?: (jobId: string, status: TrackingStatus | null) => void;
+  matchResult?: MatchResult;
+  comparing?: boolean;
+  onCompareToggle?: (jobId: string) => void;
+}) {
+  const dl = daysUntil(job.deadline, new Date(now));
+  const urgent = dl !== null && dl >= 0 && dl <= 15;
+  const published = daysSince(job.firstSeen, new Date(now));
+  const barColor = CATEGORY_BAR_COLORS[job.category] ?? CATEGORY_BAR_COLORS["其他"];
+
+  return (
+    <article className="card p-0 overflow-hidden flex flex-col">
+      {/* Top color bar */}
+      <div className={`h-[2px] ${barColor}`} />
+
+      <div className="p-4 flex flex-col gap-2.5 flex-1">
+        {/* Row 1: category + tier + tags + actions */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span
+              className="text-[10px] px-2 py-0.5 rounded font-medium"
+              style={{
+                backgroundColor: CATEGORY_PILL_STYLE[job.category]?.bg ?? "var(--border-subtle)",
+                color: CATEGORY_PILL_STYLE[job.category]?.color ?? "var(--text-tertiary)",
+              }}
+            >
+              {job.category}
+            </span>
+            {job.jobType && (
+              <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--info-light)] text-[var(--info)] font-medium">
+                {job.jobType}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {isNew && (
+              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--success-light)] text-[var(--success)] animate-pulse">
+                NEW
+              </span>
+            )}
+            {onCompareToggle && (
+              <button
+                onClick={() => onCompareToggle(job.id)}
+                className={`w-6 h-6 rounded flex items-center justify-center transition text-[10px] ${
+                  comparing ? "bg-[var(--text)] text-[var(--text-inverse)]" : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--border-subtle)]"
+                }`}
+                title="加入对比"
+              >
+                ⇄
+              </button>
+            )}
+            {onTrack && (
+              <button
+                onClick={() => onTrack(job.id, trackingStatus ? null : "saved")}
+                className={`w-6 h-6 rounded flex items-center justify-center transition ${
+                  trackingStatus ? "text-[var(--error)] bg-[var(--error-light)]" : "text-[var(--text-tertiary)] hover:bg-[var(--brand-light)] hover:text-[var(--brand)]"
+                }`}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill={trackingStatus ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Row 2: Company + Salary */}
+        <div className="flex items-center gap-2">
+          <a href={`/job/${job.id}`} className="text-[14px] font-semibold tracking-tight text-[var(--text)] hover:text-[var(--brand)] transition truncate">{job.company}</a>
+          {job.salary && (
+            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--success-light)] text-[var(--success)] whitespace-nowrap shrink-0">
+              {job.salary}
+            </span>
+          )}
+        </div>
+
+        {/* Row 3: Title */}
+        <div className="text-[13px] text-[var(--text)] line-clamp-2 leading-snug font-medium">
+          {job.title}
+        </div>
+
+        {/* Row 4: Role tags + requirements */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {extractRoleTags(job).map((tag) => (
+            <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--brand-light)] text-[var(--brand)] font-medium">
+              {tag}
+            </span>
+          ))}
+          {job.requirements && (
+            <span className="text-[10px] text-[var(--text-tertiary)] ml-0.5">{job.requirements}</span>
+          )}
+        </div>
+
+        {/* Row 5: Location */}
+        <div className="flex flex-wrap gap-1">
+          {job.location.slice(0, 5).map((loc) => (
+            <span key={loc} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--border-subtle)] text-[var(--text-secondary)]">
+              {loc}
+            </span>
+          ))}
+        </div>
+
+        {/* Row 6: Deadline & freshness */}
+        <div className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+          {job.deadline ? (
+            <span className={urgent ? "text-[var(--error)] font-medium" : ""}>
+              截止 {job.deadline.slice(5, 10).replace("-", "/")}
+              {dl !== null && dl >= 0 && (
+                <span className={`ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  dl <= 3 ? "bg-[var(--error-light)] text-[var(--error)]" : dl <= 7 ? "bg-[var(--warning-light)] text-[var(--warning)]" : "bg-[var(--success-light)] text-[var(--success)]"
+                }`}>
+                  {dl}天
+                </span>
+              )}
+              {dl !== null && dl < 0 && <span className="text-[var(--text-tertiary)] ml-1">已过期</span>}
+            </span>
+          ) : (
+            <span className="text-[var(--success)] font-medium">滚动招聘</span>
+          )}
+          <span className="text-[var(--border-strong)]">|</span>
+          <span>收录 {published ?? job.firstSeen.slice(0, 10)}</span>
+        </div>
+
+        <div className="mt-auto space-y-2.5 pt-2">
+        {/* Smart Analysis */}
+        <SmartAnalysis job={job} matchResult={matchResult} />
+
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-2.5 border-t border-[var(--border-subtle)]">
+          <div className="flex items-center gap-2">
+            {onTrack && (
+              <select
+                value={trackingStatus ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "") {
+                    onTrack(job.id, null);
+                  } else {
+                    onTrack(job.id, v as TrackingStatus);
+                  }
+                }}
+                className="text-[11px] px-2 py-1.5 rounded border border-[var(--border)] text-[var(--text-secondary)] bg-[var(--surface)]"
+              >
+                {STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {job.applyUrl && (
+            <a
+              href={job.applyUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] font-medium text-[var(--text-inverse)] px-3 py-1.5 rounded bg-[var(--brand)] hover:bg-[var(--brand-dark)] shadow-[var(--shadow-sm)] transition"
+            >
+              投递 →
+            </a>
+          )}
+        </div>
+        </div>
+      </div>
+    </article>
+  );
+}
